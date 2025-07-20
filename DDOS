@@ -1,4 +1,5 @@
-import tkinter as tk
+
+            import tkinter as tk
 import threading
 import time
 import subprocess
@@ -85,154 +86,13 @@ def run_hybrid_ping():
                 return
 
         log_label.config(text="⚡ HTTP ping running (concurrent)...", fg="yellow")
-        asyncio.run(run_async_http_pings_concurrent())
-        if not stop_event.is_set():
-            log_label.config(text="✅ All done!", fg="lime")
 
-    threading.Thread(target=task, daemon=True).start()
+        # Create and run event loop manually inside the thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(run_async_http_pings_concurrent())
+        loop.close()
 
-def stop_ping():
-    stop_event.set()
-    log_label.config(text="⏹ Stopping...", fg="orange")
-
-# GUI setup
-root = tk.Tk()
-root.title("NullTrace Hybrid Ping Tool (Fast Concurrent + Ordered Output + Stop)")
-root.geometry("700x600")
-root.config(bg="black")
-
-tk.Label(root, text="NULLTRACE HYBRID PING", fg="red", bg="black", font=("Courier", 20, "bold")).pack(pady=10)
-
-tk.Label(root, text="Target (e.g., https://google.com):", fg="white", bg="black").pack()
-url_entry = tk.Entry(root, width=50)
-url_entry.insert(0, "http://localhost")
-url_entry.pack(pady=5)
-
-tk.Label(root, text="Number of Requests:", fg="white", bg="black").pack()
-requests_entry = tk.Entry(root, width=10)
-requests_entry.insert(0, "10")
-requests_entry.pack(pady=5)
-
-fast_mode_var = tk.BooleanVar(value=True)
-fast_mode_check = tk.Checkbutton(root, text="Fast Mode (skip ICMP ping)", variable=fast_mode_var, fg="lime", bg="black")
-fast_mode_check.pack(pady=5)
-
-btn_frame = tk.Frame(root, bg="black")
-btn_frame.pack(pady=15)
-
-start_btn = tk.Button(btn_frame, text="Start Hybrid Ping", command=run_hybrid_ping, bg="red", fg="white", width=15)
-start_btn.pack(side="left", padx=5)
-
-stop_btn = tk.Button(btn_frame, text="Stop", command=stop_ping, bg="gray", fg="white", width=10)
-stop_btn.pack(side="left", padx=5)
-
-log_label = tk.Label(root, text="", fg="lime", bg="black")
-log_label.pack()
-
-frame = tk.Frame(root)
-frame.pack(fill="both", expand=True, padx=10, pady=10)
-
-scrollbar = tk.Scrollbar(frame)
-scrollbar.pack(side="right", fill="y")
-
-result_box = tk.Text(frame, height=25, width=90, bg="black", fg="white", state='disabled', yscrollcommand=scrollbar.set)
-result_box.pack(side="left", fill="both", expand=True)
-scrollbar.config(command=result_box.yview)
-
-# Text colors
-result_box.tag_config("green", foreground="lime")
-result_box.tag_config("red", foreground="red")
-result_box.tag_config("orange", foreground="orange")
-result_box.tag_config("yellow", foreground="yellow")
-
-root.mainloop()import tkinter as tk
-import threading
-import time
-import subprocess
-import platform
-import asyncio
-import aiohttp
-
-stop_event = threading.Event()
-
-def run_hybrid_ping():
-    url = url_entry.get()
-    try:
-        count = int(requests_entry.get())
-    except ValueError:
-        log_label.config(text="❌ Invalid request count.", fg="red")
-        return
-
-    fast_mode = fast_mode_var.get()
-
-    def insert_colored(text, color):
-        result_box.config(state='normal')
-        result_box.insert(tk.END, text + "\n", color)
-        result_box.see(tk.END)
-        result_box.config(state='disabled')
-
-    def run_icmp_ping():
-        ping_host = url.replace("http://", "").replace("https://", "").split('/')[0]
-        ping_command = ["ping", "-n" if platform.system() == "Windows" else "-c", str(count), ping_host]
-        try:
-            proc = subprocess.Popen(ping_command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
-            for line in proc.stdout:
-                if stop_event.is_set():
-                    proc.terminate()
-                    insert_colored("❌ ICMP Ping stopped by user.", "red")
-                    break
-                insert_colored(line.strip(), "green")
-            proc.stdout.close()
-            proc.wait()
-        except Exception as e:
-            insert_colored(f"❌ ICMP Ping failed: {e}", "red")
-
-    async def async_http_ping(session, url, i):
-        if stop_event.is_set():
-            return i, f"❌ HTTP {i+1} stopped by user.", "red"
-        start = time.perf_counter()
-        try:
-            async with session.get(url, timeout=5) as response:
-                await response.read()
-                latency = (time.perf_counter() - start) * 1000
-                if response.status == 429:
-                    return i, f"⚠️ HTTP {i+1}: {latency:.1f} ms | Status {response.status} (Too Many Requests)", "orange"
-                elif 200 <= response.status < 300:
-                    return i, f"✅ HTTP {i+1}: {latency:.1f} ms | Status {response.status}", "green"
-                else:
-                    return i, f"❌ HTTP {i+1}: {latency:.1f} ms | Status {response.status}", "red"
-        except Exception as e:
-            return i, f"❌ HTTP {i+1} failed: {e}", "red"
-
-    async def run_async_http_pings_concurrent():
-        async with aiohttp.ClientSession() as session:
-            tasks = [async_http_ping(session, url, i) for i in range(count)]
-            results = await asyncio.gather(*tasks)
-
-            # Sort results by index to maintain order
-            results.sort(key=lambda x: x[0])
-
-            for _, text, color in results:
-                insert_colored(text, color)
-                if stop_event.is_set():
-                    insert_colored("❌ HTTP pings stopped by user.", "red")
-                    break
-
-    def task():
-        stop_event.clear()
-        result_box.config(state='normal')
-        result_box.delete(1.0, tk.END)
-        result_box.config(state='disabled')
-
-        if not fast_mode:
-            log_label.config(text="⚡ ICMP ping running...", fg="yellow")
-            run_icmp_ping()
-            if stop_event.is_set():
-                log_label.config(text="❌ Ping stopped!", fg="red")
-                return
-
-        log_label.config(text="⚡ HTTP ping running (concurrent)...", fg="yellow")
-        asyncio.run(run_async_http_pings_concurrent())
         if not stop_event.is_set():
             log_label.config(text="✅ All done!", fg="lime")
 
